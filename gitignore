@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# IDE files
+.idea/
+.vscode/
+
+# Project Specific - Data & Reports
+# Usually, we don't track raw data or generated reports in Git
+data/prices/
+data/raw/
+reports/*.xlsx
+
+# Keep config but ignore local journal files
+data/config/ServerCertificate-journal
+
+# Logs
+*.log
