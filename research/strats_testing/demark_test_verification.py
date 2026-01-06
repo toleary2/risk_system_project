@@ -34,7 +34,12 @@ def verify_calculations():
 
     # 2. Run calculations
     td = TDComboSequential()
+    # Assign the output of the calculation to 'results'
     results = td.calculate(df)
+
+    # If the calculate method modifies df in-place and returns None, use df
+    if results is None:
+        results = df
 
     print(f"--- Dataset Statistics ---")
     print(f"Total Bars: {len(results)}")
