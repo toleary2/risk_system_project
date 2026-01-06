@@ -1,32 +1,42 @@
-instrument,bbg_ticker,contract_size,unit,currency,sector
-soyoil,bo1 comdty,600,lbs,usd,grains_oilseed
-corn,c 1 comdty,50,bu,usd,grains_oilseed
-wheat_matif,ca1 comdty,50,bu,usd,grains_oilseed
-cocoa_ice,cc1 comdty,10,mt,usd,soft
-oil_wti_nymex,cl1 comdty,1000,bbl,usd,energy
-oil_brent,co1 comdty,1000,bbl,usd,energy
-cotton,ct1 comdty,500,lbs,usd,soft
-coffee_robusta,df1 comdty,10,mt,usd,soft
-oil_wti_ice,en1 comdty,1000,bbl,usd,energy
-feeder_cattle,fc1 comdty,500,lbs,usd,livestock
-gold,gc1 comdty,100,oz,usd,metal
-copper,hg1 comdty,250,lbs,usd,metal
-heating_oil,ho1 comdty,420,gal,usd,energy
-rapeseed,ij1 comdty,50,mt,eur,grains_oilseed
-orange_juice,jo1 comdty,150,lbs,usd,soft
-coffee_arabica,kc1 comdty,375,lbs,usd,soft
-wheat_kansas,kw1 comdty,50,bu,usd,grains_oilseed
-live_cattle,lc1 comdty,400,lbs,usd,livestock
-lean_hogs,lh1 comdty,400,lbs,usd,livestock
-wheat_minni,mw1 comdty,50,bu,usd,grains_oilseed
-nat_gas,ng1 comdty,10000,mmbtu,usd,energy
-palladium,pa1 comdty,100,oz,usd,metal
-platinum,pl1 comdty,50,oz,usd,metal
-cocoa_nyse,qc1 comdty,10,mt,gbp,soft
-gasoil,qs1 comdty,100,mt,usd,energy
-soybeans,s 1 comdty,50,bu,usd,grains_oilseed
-sugar11,sb1 comdty,1120,lbs,usd,soft
-silver,si1 comdty,5000,oz,usd,metal
-soymeal,sm1 comdty,100,st,usd,grains_oilseed
-wheat_cbot,w 1 comdty,50,bu,usd,grains_oilseed
-rbob,xb1 comdty,420,gal,usd,energy
+instrument,bbg_ticker,contract_size,unit,currency,sector,,
+soyoil,bo1 comdty,600,lbs,usd,grains_oilseed,,
+corn,c 1 comdty,50,bu,usd,grains_oilseed,,
+wheat_matif,ca1 comdty,50,bu,usd,grains_oilseed,,
+cocoa_ice,cc1 comdty,10,mt,usd,soft,,
+oil_wti_nymex,cl1 comdty,1000,bbl,usd,energy,,
+oil_brent,co1 comdty,1000,bbl,usd,energy,,
+cotton,ct1 comdty,500,lbs,usd,soft,,
+coffee_robusta,df1 comdty,10,mt,usd,soft,,
+oil_wti_ice,en1 comdty,1000,bbl,usd,energy,,
+feeder_cattle,fc1 comdty,500,lbs,usd,livestock,,
+gold,gc1 comdty,100,oz,usd,metal,,
+copper,hg1 comdty,250,lbs,usd,metal,,
+heating_oil,ho1 comdty,420,gal,usd,energy,,
+rapeseed,ij1 comdty,50,mt,eur,grains_oilseed,,
+orange_juice,jo1 comdty,150,lbs,usd,soft,,
+coffee_arabica,kc1 comdty,375,lbs,usd,soft,,
+wheat_kansas,kw1 comdty,50,bu,usd,grains_oilseed,,
+live_cattle,lc1 comdty,400,lbs,usd,livestock,,
+lean_hogs,lh1 comdty,400,lbs,usd,livestock,,
+wheat_minni,mw1 comdty,50,bu,usd,grains_oilseed,,
+nat_gas,ng1 comdty,10000,mmbtu,usd,energy,,
+palladium,pa1 comdty,100,oz,usd,metal,,
+platinum,pl1 comdty,50,oz,usd,metal,,
+cocoa_nyse,qc1 comdty,10,mt,gbp,soft,,
+gasoil,qs1 comdty,100,mt,usd,energy,,
+soybeans,s 1 comdty,50,bu,usd,grains_oilseed,,
+sugar11,sb1 comdty,1120,lbs,usd,soft,,
+silver,si1 comdty,5000,oz,usd,metal,,
+soymeal,sm1 comdty,100,st,usd,grains_oilseed,,
+wheat_cbot,w 1 comdty,50,bu,usd,grains_oilseed,,
+rbob,xb1 comdty,420,gal,usd,energy,,
+rapeseed_usd,.ij1usd u index,1,,usd,grains_oilseed,,
+rapeseed_canola,.ij1rs1 u index,1,,usd,grains_oilseed,,
+rapeseed_soybeans,.ij1s1 u index,1,,usd,grains_oilseed,,
+rapeseed_wheat_matif,.ij1ca1 u index,1,,usd,grains_oilseed,,
+wheat_matif_wheat_cbot,.ca1w1 u index,1,,usd,grains_oilseed,,
+oilshare,.oilshr1 u index,1,,usd,grains_oilseed,,
+palmoil_soyoil,.pobo u index,1,,usd,grains_oilseed,,
+matif_boardcrush,.mtfbc1 u index,1,,usd,grains_oilseed,,
+arabica_robusta,.kcdf1 u index,1,,usd,grains_oilseed,,
+soy_corn,.s1c1 u index,1,,usd,grains_oilseed,,

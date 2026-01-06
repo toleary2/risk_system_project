@@ -74,10 +74,21 @@ def extract_daily_prices_to_csv(file_path: str, config_path: str, output_dir: st
         output_file = out_path / f"{commodity_name}_daily.csv"
         df.to_csv(output_file, index=False)
 
+
 if __name__ == "__main__":
     current_dir = Path(__file__).resolve().parent
     project_root = current_dir.parent.parent
-    raw_file = project_root / "data" / "raw" / "raw_prices_daily.xlsx"
+
     config_file = project_root / "data" / "config" / "contract_specs.csv"
     output_dir = project_root / "data" / "prices"
-    extract_daily_prices_to_csv(str(raw_file), str(config_file), output_dir=str(output_dir))
+
+    # List of files to process
+    raw_files = [
+                project_root / "data" / "raw" / "raw_interspreads_daily.xlsx"
+    ]
+
+    for raw_file in raw_files:
+        if raw_file.exists():
+            extract_daily_prices_to_csv(str(raw_file), str(config_file), output_dir=str(output_dir))
+        else:
+            print(f"Skipping: {raw_file.name} not found.")

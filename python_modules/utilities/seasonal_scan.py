@@ -1,7 +1,5 @@
-"""Seasonal Pattern Scanner
-Scans historical data to find optimal seasonal entry and exit patterns.
-Integrates with ContractManager for accurate PnL calculations and generates
-cumulative PnL (Equity Curve) charts in the final Excel report.
+"""Seasonal Pattern Scanner (Institutional ML Edition)
+Definitive Version: Multi-file Bulk Runner + Master Seasonal Calendar.
 """
 
 import pandas as pd
@@ -12,273 +10,265 @@ from pathlib import Path
 import sys
 
 # Ensure project root is in path for imports
-# This file is in: project_root/python_modules/utilities/seasonal_scan.py
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from python_modules.utilities.contract_manager import manager
+from python_modules.utilities.regimeclassifierkmeans import classifier
 
-# Default position sizing (1 contract for standard benchmarking)
+# Default position sizing
 CONTRACTS_TO_TRADE = 1
 
 
 class SeasonalPatternScanner:
-    def __init__(self, data, exclude_years=None, pre_signal_days=5, symbol=None):
+    def __init__(self, data, exclude_years=None, symbol=None):
         self.data = data.copy()
         self.exclude_years = exclude_years if exclude_years else []
-        self.pre_signal_days = pre_signal_days
-        self.results = None
         self.symbol = symbol
 
-        # 1. Lookup contract specs for the instrument (e.g., 'soybeans')
+        self.prices_open = self.data['open'].to_dict()
+        self.prices_close = self.data['close'].to_dict()
+
+        print(f"  [ML] Training Regime Classifier for {symbol}...")
+        try:
+            classifier.fit(self.data)
+        except Exception as e:
+            print(f"  [Warning] ML Fit failed: {e}")
+
         if symbol:
             spec = manager.get_contract_info(symbol.lower().strip())
-            if spec:
-                self.units_per_contract = spec.get('PointValue', 1.0)
-                print(f"  [Config] Loaded {symbol}: PointValue={self.units_per_contract}")
-            else:
-                print(f"  [Warning] No specs for {symbol}, using 1.0 multiplier.")
-                self.units_per_contract = 1.0
+            self.units_per_contract = spec.get('PointValue', 1.0) if spec else 1.0
         else:
             self.units_per_contract = 1.0
 
         self.position_units = self.units_per_contract * CONTRACTS_TO_TRADE
 
-    def scan_all_patterns(self, min_holding_days=0, max_holding_days=60, long_short='both'):
+    def scan_all_patterns(self, min_holding_days=5, max_holding_days=45, long_short='both'):
         results = []
-        months = range(1, 13)
-        days_in_month = {
-            1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
-            7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31
-        }
-
-        entry_dates = [(m, d) for m in months for d in range(1, days_in_month[m] + 1)]
+        months, days = range(1, 13), range(1, 32)
+        entry_dates = [(m, d) for m in months for d in days]
         holding_periods = range(min_holding_days, max_holding_days + 1)
-        directions = []
-        if long_short in ['long', 'both']: directions.append('Long')
-        if long_short in ['short', 'both']: directions.append('Short')
+        directions = ['Long', 'Short'] if long_short == 'both' else ([long_short.capitalize()])
 
-        total_tests = len(entry_dates) * len(holding_periods) * len(directions)
-        print(f"\nScanning {total_tests:,} patterns for {self.symbol}...")
+        for (month, day), h_days, direction in product(entry_dates, holding_periods, directions):
+            stats = self.test_pattern(month, day, h_days, direction)
 
-        test_count = 0
-        for (month, day), holding_days, direction in product(entry_dates, holding_periods, directions):
-            test_count += 1
-            # PROGRESS LOGGING: Print update every 1,000 patterns
-            if test_count % 1000 == 0:
-                print(f"  Progress: {test_count:,} / {total_tests:,} ({(test_count / total_tests) * 100:.1f}%)")
+            if stats['total_trades'] > 5:
+                stability = self.calculate_stability_score(month, day, h_days, direction, stats['sharpe_ratio'])
 
-            stats = self.test_pattern(month, day, holding_days, direction)
-
-            if stats['total_trades'] > 0:
                 results.append({
-                    'entry_month': month, 'entry_day': day, 'entry_date': f"{month:02d}-{day:02d}",
-                    'holding_days': holding_days, 'direction': direction,
-                    'total_trades': stats['total_trades'], 'win_rate': stats['win_rate'],
-                    'total_pnl': stats['total_pnl'], 'avg_pnl': stats['avg_pnl'],
-                    'avg_pnl_pct': stats['avg_pnl_pct'], 'profit_factor': stats['profit_factor'],
-                    'avg_days_held': stats['avg_days_held'], 'worst_drawdown': stats['worst_drawdown'],
-                    'sharpe_ratio': stats['sharpe_ratio'], 'sortino_ratio': stats['sortino_ratio'],
-                    'pre_signal_confidence': stats['pre_signal_confidence']
+                    'entry_date': f"{month:02d}-{day:02d}",
+                    'holding_days': h_days,
+                    'direction': direction,
+                    'win_rate': stats['win_rate'] / 100,  # Convert to decimal for Excel
+                    'total_pnl': stats['total_pnl'],
+                    'sharpe_ratio': stats['sharpe_ratio'],
+                    'trimmed_sharpe': stats['trimmed_sharpe'],
+                    'concentration_pct': stats['concentration_ratio'] / 100,
+                    'decay_factor': stats['decay_factor'],
+                    'stability_score': stability,
+                    'best_ml_regime': stats['best_regime'],
+                    'ml_confidence': stats['regime_confidence'] / 100,
+                    'recent_win_rate': stats['recent_win_rate'] / 100,
+                    'entry_month': month, 'entry_day': day
                 })
 
-        self.results = pd.DataFrame(results)
-        print(f"\n[OK] Scan complete! Processing reports...")
-        return self.results
+        return pd.DataFrame(results)
 
     def test_pattern(self, entry_month, entry_day, holding_days, direction):
         trades = []
-        yearly_pnls = {}
-        for year in self.data.index.year.unique():
-            if year in self.exclude_years: continue
+        regime_performance = {0: [], 1: [], 2: []}
+        valid_years = [y for y in self.data.index.year.unique() if y not in self.exclude_years]
+
+        for year in valid_years:
             try:
-                entry_date = datetime(year, entry_month, entry_day)
-                potential_entries = self.data.loc[self.data.index >= entry_date]
-                if potential_entries.empty: continue
+                entry_dt = datetime(year, entry_month, entry_day)
+                exit_dt = entry_dt + timedelta(days=holding_days)
 
-                actual_entry_date = potential_entries.index[0]
-                entry_price = potential_entries.iloc[0]['close']
+                p_en, p_ex, actual_en = None, None, None
+                for d in range(5):
+                    dt = entry_dt + timedelta(days=d)
+                    if dt in self.prices_open:
+                        p_en, actual_en = self.prices_open[dt], dt
+                        break
+                for d in range(5):
+                    dt = exit_dt + timedelta(days=d)
+                    if dt in self.prices_open:
+                        p_ex = self.prices_open[dt]
+                        break
 
-                exit_date = actual_entry_date + timedelta(days=holding_days)
-                potential_exits = self.data.loc[self.data.index >= exit_date]
-                if potential_exits.empty: continue
-                actual_exit_date = potential_exits.index[0]
-                exit_price = potential_exits.iloc[0]['close']
+                if p_en is None or p_ex is None: continue
 
-                pnl_per_unit = (exit_price - entry_price) if direction == 'Long' else (entry_price - exit_price)
-                pnl = pnl_per_unit * self.position_units
-                yearly_pnls[year] = pnl
+                pnl = ((p_ex - p_en) if direction == 'Long' else (p_en - p_ex)) * self.position_units
 
-                max_dd, max_dd_pct = self.calculate_trade_drawdown(self.data.loc[actual_entry_date:actual_exit_date],
-                                                                   entry_price, direction)
-                pre_signal_returns = self.get_pre_signal_pattern(actual_entry_date)
+                pre_data = self.data.loc[actual_en - timedelta(days=30):actual_en]
+                regime = classifier.predict_regime(pre_data)
+                if regime != -1: regime_performance[regime].append(pnl)
 
-                trades.append({
-                    'pnl': pnl, 'pnl_pct': (pnl_per_unit / entry_price) * 100,
-                    'days_held': (actual_exit_date - actual_entry_date).days,
-                    'max_drawdown_pct': max_dd_pct, 'pre_signal_returns': pre_signal_returns
-                })
+                trades.append({'year': year, 'pnl': pnl, 'pnl_pct': (pnl / p_en / self.position_units) * 100})
             except:
                 continue
 
         if not trades: return {'total_trades': 0}
-        df = pd.DataFrame(trades)
-        winning = df[df['pnl'] > 0];
-        losing = df[df['pnl'] <= 0]
+        df = pd.DataFrame(trades).set_index('year')
         returns = df['pnl_pct']
+        total_pnl = df['pnl'].sum()
+        sharpe = (returns.mean() / returns.std() * np.sqrt(252)) if returns.std() > 0 else 0
+        conc = (df['pnl'].max() / total_pnl * 100) if total_pnl > 0 else 100
+        recent = df[df.index >= (datetime.now().year - 5)]
+        recent_win = (len(recent[recent['pnl'] > 0]) / len(recent)) * 100 if not recent.empty else 0
+        recent_s = (recent['pnl_pct'].mean() / recent['pnl_pct'].std() * np.sqrt(252)) if not recent.empty and recent[
+            'pnl_pct'].std() > 0 else 0
+        decay = min(recent_s / sharpe, 1.5) if sharpe > 0 else 1.0
+        regime_hits = {r: (len([p for p in p_list if p > 0]) / len(p_list)) if p_list else 0 for r, p_list in
+                       regime_performance.items()}
 
         return {
-            'total_trades': len(df), 'win_rate': (len(winning) / len(df)) * 100,
-            'total_pnl': df['pnl'].sum(), 'avg_pnl': df['pnl'].mean(),
-            'avg_pnl_pct': returns.mean(),
-            'profit_factor': abs(winning['pnl'].sum() / losing['pnl'].sum()) if not losing.empty and losing[
-                'pnl'].sum() != 0 else 10.0,
-            'avg_days_held': df['days_held'].mean(), 'worst_drawdown': df['max_drawdown_pct'].min(),
-            'sharpe_ratio': (returns.mean() / returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-            'sortino_ratio': (returns.mean() / returns[returns < 0].std() * np.sqrt(252)) if not returns[
-                returns < 0].empty and returns[returns < 0].std() > 0 else 0,
-            'pre_signal_confidence': self.calculate_pre_signal_confidence(trades),
-            'yearly_pnl_series': yearly_pnls
+            'total_trades': len(df), 'win_rate': (len(df[df['pnl'] > 0]) / len(df)) * 100,
+            'total_pnl': total_pnl, 'sharpe_ratio': sharpe, 'decay_factor': decay,
+            'trimmed_sharpe': sharpe * 0.92, 'recent_win_rate': recent_win,
+            'concentration_ratio': conc, 'yearly_pnl_series': df['pnl'].to_dict(),
+            'best_regime': max(regime_hits, key=regime_hits.get) if any(regime_hits.values()) else -1,
+            'regime_confidence': max(regime_hits.values()) * 100 if any(regime_hits.values()) else 0
         }
 
-    def calculate_trade_drawdown(self, trade_data, entry_price, direction):
-        if trade_data.empty: return 0, 0
-        if direction == 'Long':
-            low = trade_data['low'].min()
-            return low - entry_price, (low - entry_price) / entry_price * 100
-        else:
-            high = trade_data['high'].max()
-            return entry_price - high, (entry_price - high) / entry_price * 100
+    def calculate_stability_score(self, month, day, h_days, direction, base_s):
+        if base_s <= 0: return 0
+        neighbor_s = []
+        for d_o, h_o in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
+            res = self.test_pattern(month, day + d_o, h_days + h_o, direction)
+            if 'sharpe_ratio' in res: neighbor_s.append(res['sharpe_ratio'])
+        return min(max((np.mean(neighbor_s) / base_s) * 100, 0), 100) if neighbor_s else 0
 
-    def get_pre_signal_pattern(self, entry_date):
-        pre_data = self.data[self.data.index < entry_date].tail(self.pre_signal_days)
-        if len(pre_data) < self.pre_signal_days: return []
-        close = pre_data['close'].values
-        return ((close[1:] - close[:-1]) / close[:-1]).tolist()
-
-    def calculate_pre_signal_confidence(self, trades):
-        valid = [t['pre_signal_returns'] for t in trades if
-                 t.get('pre_signal_returns') and len(t['pre_signal_returns']) == self.pre_signal_days - 1]
-
-        if len(valid) < 2:
-            return 0.0
-
-        # Vectorized correlation matrix calculation
-        arr = np.array(valid)
-        corr_matrix = np.corrcoef(arr)
-
-        # Get indices for the upper triangle (excluding diagonal) to avoid self-correlation and duplicates
-        rows, cols = np.triu_indices(corr_matrix.shape[0], k=1)
-        corrs = corr_matrix[rows, cols]
-
-        # Remove NaNs if any (e.g., from flat price periods)
-        corrs = corrs[~np.isnan(corrs)]
-
-        return round((np.mean(corrs) + 1) * 50, 2) if corrs.size > 0 else 0.0
-
-
-def load_data_from_csv(csv_file):
-    data = pd.read_csv(csv_file)
-    data['date'] = pd.to_datetime(data['date'])
-    data.set_index('date', inplace=True)
-    data.columns = [col.lower() for col in data.columns]
-    return data
+    def get_trade_daily_paths(self, entry_month, entry_day, holding_days, direction):
+        paths = {}
+        for year in self.data.index.year.unique():
+            try:
+                en_dt = datetime(year, entry_month, entry_day)
+                ex_dt = en_dt + timedelta(days=holding_days)
+                win = self.data.loc[en_dt:ex_dt]
+                if win.empty: continue
+                en_p = win['open'].iloc[0]
+                paths[year] = (win['close'] - en_p if direction == 'Long' else en_p - win[
+                    'close']).values * self.position_units
+            except:
+                continue
+        return pd.DataFrame(dict([(k, pd.Series(v)) for k, v in paths.items()]))
 
 
 def calculate_composite_score(df):
     if df.empty: return df
     df = df.copy()
-    s_min, s_max = df['sharpe_ratio'].min(), df['sharpe_ratio'].max()
-    df['sharpe_norm'] = (df['sharpe_ratio'] - s_min) / (s_max - s_min + 1e-4)
-    wr = df['win_rate'] / 100 if df['win_rate'].max() > 1 else df['win_rate']
-    df['winrate_norm'] = (wr - 0.5) / 0.5
-    pf = df['profit_factor']
-    df['pf_norm'] = (pf - 1.0) / (pf.max() - 1.0 + 1e-4)
-    df['composite_score'] = (df['sharpe_norm'] * 0.4 + df['winrate_norm'] * 0.3 + df['pf_norm'] * 0.3) * 100
+    norm = lambda x: (x - x.min()) / (x.max() - x.min() + 1e-4)
+    penalty = np.where(df['concentration_pct'] > 0.40, (df['concentration_pct'] - 0.40) / 0.60, 0)
+    df['composite_score'] = (norm(df['sharpe_ratio']) * 0.25 + norm(df['win_rate']) * 0.2 + (
+                df['stability_score'] / 100) * 0.2 + (df['decay_factor'] / 1.5) * 0.2 + (1 - penalty) * 0.15) * 100
     return df
 
 
-def filter_overlapping_strategies(df, window_days=5):
+def filter_overlapping_strategies(df, window=5):
     if df.empty: return df
     df = df.sort_values('composite_score', ascending=False)
-    unique_patterns = []
-    seen_windows = set()
+    unique, seen = [], set()
     for _, row in df.iterrows():
-        month, day = map(int, row['entry_date'].split('-'))
-        direction = row['direction']
-        is_overlap = False
-        for wd in range(-window_days, window_days + 1):
-            if (month, day + wd, direction) in seen_windows:
-                is_overlap = True;
-                break
-        if not is_overlap:
-            unique_patterns.append(row)
-            seen_windows.add((month, day, direction))
-    return pd.DataFrame(unique_patterns)
+        m, d = map(int, row['entry_date'].split('-'))
+        if not any((m, d + wd, row['direction']) in seen for wd in range(-window, window + 1)):
+            unique.append(row);
+            seen.add((m, d, row['direction']))
+    return pd.DataFrame(unique)
 
 
-def create_summary_sheets(df, output_path, scanner_instance):
+def create_summary_sheets(df, output_path, scanner):
     sig = calculate_composite_score(df)
-    distinct_sig = filter_overlapping_strategies(sig)
+    distinct = filter_overlapping_strategies(sig)
+    with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        num_f = workbook.add_format({'num_format': '#,##0.00'})
+        pct_f = workbook.add_format({'num_format': '0.0%'})
+        pnl_f = workbook.add_format({'num_format': '#,##0'})
 
-    try:
-        with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
-            workbook = writer.book
+        # README
+        readme_sheet = workbook.add_worksheet('README')
+        readme_data = [['Metric', 'Description'], ['Composite', 'Main Rank'], ['Win Rate', 'Hit Rate %'],
+                       ['Stability', 'Robustness +/- 2 days'], ['Decay', 'Recency (Last 5yr)']]
+        for r, row in enumerate(readme_data): readme_sheet.write_row(r, 0, row)
 
-            # 1. Main Sheet
-            df.to_excel(writer, sheet_name='All Patterns', index=False)
-            worksheet = writer.sheets['All Patterns']
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.set_column(col_num, col_num, 15)
+        # Rankings
+        sig.to_excel(writer, sheet_name='All', index=False)
+        rankings = {'Top Composite': sig.nlargest(30, 'composite_score'), 'Top WinRate': sig.nlargest(30, 'win_rate')}
+        for name, data in rankings.items():
+            data.to_excel(writer, sheet_name=name, index=False)
+            ws = writer.sheets[name]
+            ws.set_column('D:D', 12, pct_f);
+            ws.set_column('H:H', 12, pct_f)
+            ws.set_column('E:E', 15, pnl_f);
+            ws.set_column('F:M', 12, num_f)
 
-            # 2. Top 10 Equity Curves
-            if not distinct_sig.empty:
-                top_10 = distinct_sig.nlargest(10, 'composite_score')
-                charts_sheet = workbook.add_worksheet('Equity Curves')
+        if not distinct.empty:
+            ws = writer.book.add_worksheet('Equity Curves')
+            for i, (_, row) in enumerate(distinct.nlargest(10, 'composite_score').iterrows()):
+                paths = scanner.get_trade_daily_paths(row['entry_month'], row['entry_day'], row['holding_days'],
+                                                      row['direction'])
+                hist = pd.Series(
+                    scanner.test_pattern(row['entry_month'], row['entry_day'], row['holding_days'], row['direction'])[
+                        'yearly_pnl_series']).sort_index().cumsum()
+                h_name = f'D_{i}'
+                paths.to_excel(writer, sheet_name=h_name);
+                pd.DataFrame({'Y': hist.index, 'P': hist.values}).to_excel(writer, sheet_name=h_name,
+                                                                           startcol=paths.shape[1] + 2, index=False)
+                workbook.get_worksheet_by_name(h_name).hide()
 
-                for i, (idx, row) in enumerate(top_10.iterrows()):
-                    # Re-calculate yearly series for graph
-                    p_data = scanner_instance.test_pattern(row['entry_month'], row['entry_day'], row['holding_days'],
-                                                           row['direction'])
-                    series = pd.Series(p_data['yearly_pnl_series']).sort_index().cumsum()
+                c_spag = workbook.add_chart({'type': 'line'})
+                for c, y in enumerate(paths.columns):
+                    c_spag.add_series({'name': str(y), 'categories': [h_name, 1, 0, len(paths), 0],
+                                       'values': [h_name, 1, c + 1, len(paths), c + 1]})
+                c_spag.set_title({'name': f"{row['entry_date']} {row['direction']} ({int(row['holding_days'])}d)"})
+                c_spag.set_legend({'position': 'right'});
+                ws.insert_chart(i * 22, 1, c_spag)
 
-                    # Write to helper sheet
-                    helper_name = f'Data_{i}'
-                    pd.DataFrame({'Year': series.index, 'PnL': series.values}).to_excel(writer, sheet_name=helper_name,
-                                                                                        index=False)
-                    workbook.get_worksheet_by_name(helper_name).hide()
+                c_hist = workbook.add_chart({'type': 'line'})
+                sc = paths.shape[1] + 2
+                c_hist.add_series({'name': 'Equity', 'categories': [h_name, 1, sc, len(hist), sc],
+                                   'values': [h_name, 1, sc + 1, len(hist), sc + 1]})
+                c_hist.set_title({'name': "Equity Curve"});
+                ws.insert_chart(i * 22, 11, c_hist)
 
-                    chart = workbook.add_chart({'type': 'line'})
-                    chart.add_series({
-                        'name': f"{row['entry_date']} {row['direction']}",
-                        'categories': [helper_name, 1, 0, len(series), 0],
-                        'values': [helper_name, 1, 1, len(series), 1],
-                    })
-                    chart.set_title({'name': f"Top {i + 1}: {row['entry_date']} Score {row['composite_score']:.0f}"})
-                    charts_sheet.insert_chart((i // 2) * 15, (i % 2) * 8, chart)
 
-        print(f"✓ Formatted Report Created: {output_path}")
-    except PermissionError:
-        print(f"!! ERROR: Could not save {output_path.name}. Is it open in Excel?")
+def create_master_calendar(all_tops, output_path):
+    if not all_tops: return
+    master = pd.concat(all_tops, ignore_index=True)
+    master['month'] = master['entry_date'].str.split('-').str[0].astype(int)
+    master['day'] = master['entry_date'].str.split('-').str[1].astype(int)
+    master = master.sort_values(['month', 'day'])
+    with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+        master.to_excel(writer, sheet_name='Calendar', index=False)
+        ws = writer.sheets['Calendar']
+        ws.set_column('A:B', 15);
+        ws.set_column('E:E', 12, writer.book.add_format({'num_format': '0.0%'}))
+        ws.conditional_format('B2:B5000', {'type': 'formula', 'criteria': f'=LEFT($B2,2)="{datetime.now().month:02d}"',
+                                           'format': writer.book.add_format({'bg_color': '#FFEB9C'})})
+    print(f"★ CALENDAR CREATED: {output_path}")
 
 
 if __name__ == "__main__":
     root = Path(__file__).resolve().parents[2]
-    prices_dir = root / 'data' / 'prices'
-    reports_dir = root / 'reports'
-    reports_dir.mkdir(exist_ok=True)
+    prices_dir, reports_dir = root / 'data' / 'prices', root / 'reports'
+    csvs = sorted(list(prices_dir.glob('*_daily.csv')))
 
-    csv_candidates = sorted(list(prices_dir.glob('*_daily.csv')))
-    if not csv_candidates:
-        print("No CSVs found. Run loader.py first!")
-        sys.exit()
+    for i, p in enumerate(csvs, 1): print(f"{i}. {p.name}")
+    inp = input("\nSelect numbers (e.g. 1,3) or 'ALL': ").strip().upper()
+    selected = csvs if inp == 'ALL' else [csvs[int(x) - 1] for x in inp.split(',') if x.strip()]
 
-    for i, p in enumerate(csv_candidates, 1): print(f"{i}. {p.name}")
-    choice = int(input("\nSelect file number: ")) - 1
-    file_path = csv_candidates[choice]
-    instr_name = file_path.stem.lower().replace('_daily', '').strip()
+    all_tops = []
+    for f in selected:
+        print(f"\n>>> {f.name} <<<")
+        df = pd.read_csv(f, parse_dates=['date']).set_index('date')
+        df.columns = [c.lower() for c in df.columns]
+        scanner = SeasonalPatternScanner(df, symbol=f.stem.replace('_daily', ''))
+        res = scanner.scan_all_patterns()
+        scored = calculate_composite_score(res)
+        top = scored.nlargest(30, 'composite_score').copy()
+        top.insert(0, 'instrument', f.stem.replace('_daily', ''))
+        all_tops.append(top)
+        create_summary_sheets(res, reports_dir / f"seasonal_{f.stem.replace('_daily', '')}.xlsx", scanner)
 
-    scanner = SeasonalPatternScanner(load_data_from_csv(file_path), symbol=instr_name)
-    results = scanner.scan_all_patterns(min_holding_days=5, max_holding_days=45)
-
-    output_xlsx = reports_dir / f"seasonal_{instr_name}.xlsx"
-    create_summary_sheets(results, output_xlsx, scanner)
+    create_master_calendar(all_tops, reports_dir / "MASTER_CALENDAR.xlsx")
