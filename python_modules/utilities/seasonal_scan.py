@@ -179,7 +179,7 @@ def filter_overlapping_strategies(df, window=5):
     return pd.DataFrame(unique)
 
 
-from python_modules.utilities.regime_analyzer import regime_pm
+from python_modules.utilities.regime_analyzer_utilities import regime_pm
 
 def create_summary_sheets(df, output_path, scanner):
     sig = calculate_composite_score(df)
@@ -253,21 +253,21 @@ def create_summary_sheets(df, output_path, scanner):
                 ws.set_column('F:M', None, num_f)
 
             if not distinct_all.empty:
-            ws = writer.book.add_worksheet('Equity Curves')
-            # Use the top 10 from our already filtered list
-            for i, (_, row) in enumerate(distinct_all.nlargest(10, 'composite_score').iterrows()):
-                paths = scanner.get_trade_daily_paths(row['entry_month'], row['entry_day'], row['holding_days'],
+                ws = writer.book.add_worksheet('Equity Curves')
+                # Use the top 10 from our already filtered list
+                for i, (_, row) in enumerate(distinct_all.nlargest(10, 'composite_score').iterrows()):
+                    paths = scanner.get_trade_daily_paths(row['entry_month'], row['entry_day'], row['holding_days'],
                                                       row['direction'])
-                hist = pd.Series(
+                    hist = pd.Series(
                     scanner.test_pattern(row['entry_month'], row['entry_day'], row['holding_days'], row['direction'])[
                         'yearly_pnl_series']).sort_index().cumsum()
-                h_name = f'D_{i}'
-                paths.to_excel(writer, sheet_name=h_name)
-                pd.DataFrame({'Y': hist.index, 'P': hist.values}).to_excel(writer, sheet_name=h_name,
+                    h_name = f'D_{i}'
+                    paths.to_excel(writer, sheet_name=h_name)
+                    pd.DataFrame({'Y': hist.index, 'P': hist.values}).to_excel(writer, sheet_name=h_name,
                                                                            startcol=paths.shape[1] + 2, index=False)
-                workbook.get_worksheet_by_name(h_name).hide()
+                    workbook.get_worksheet_by_name(h_name).hide()
 
-                c_spag = workbook.add_chart({'type': 'line'})
+                    c_spag = workbook.add_chart({'type': 'line'})
                 for c, y in enumerate(paths.columns):
                     c_spag.add_series({
                         'name': str(y),
