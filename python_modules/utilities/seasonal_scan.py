@@ -59,7 +59,7 @@ class SeasonalPatternScanner:
                     'entry_date': f"{month:02d}-{day:02d}",
                     'holding_days': h_days,
                     'direction': direction,
-                    'win_rate': stats['win_rate'] / 100,  # Convert to decimal for Excel
+                    'win_rate': stats['win_rate'] / 100,
                     'total_pnl': stats['total_pnl'],
                     'sharpe_ratio': stats['sharpe_ratio'],
                     'trimmed_sharpe': stats['trimmed_sharpe'],
@@ -161,7 +161,7 @@ def calculate_composite_score(df):
     norm = lambda x: (x - x.min()) / (x.max() - x.min() + 1e-4)
     penalty = np.where(df['concentration_pct'] > 0.40, (df['concentration_pct'] - 0.40) / 0.60, 0)
     df['composite_score'] = (norm(df['sharpe_ratio']) * 0.25 + norm(df['win_rate']) * 0.2 + (
-                df['stability_score'] / 100) * 0.2 + (df['decay_factor'] / 1.5) * 0.2 + (1 - penalty) * 0.15) * 100
+            df['stability_score'] / 100) * 0.2 + (df['decay_factor'] / 1.5) * 0.2 + (1 - penalty) * 0.15) * 100
     return df
 
 
@@ -171,79 +171,153 @@ def filter_overlapping_strategies(df, window=5):
     unique, seen = [], set()
     for _, row in df.iterrows():
         m, d = map(int, row['entry_date'].split('-'))
-        if not any((m, d + wd, row['direction']) in seen for wd in range(-window, window + 1)):
-            unique.append(row);
-            seen.add((m, d, row['direction']))
+        # Added 'instrument' to the seen key so we only filter overlaps within the same product
+        inst = row.get('instrument', 'default')
+        if not any((inst, m, d + wd, row['direction']) in seen for wd in range(-window, window + 1)):
+            unique.append(row)
+            seen.add((inst, m, d, row['direction']))
     return pd.DataFrame(unique)
 
 
+from python_modules.utilities.regime_analyzer import regime_pm
+
 def create_summary_sheets(df, output_path, scanner):
     sig = calculate_composite_score(df)
-    distinct = filter_overlapping_strategies(sig)
+    distinct_all = filter_overlapping_strategies(sig, window=5)
+
     with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
         workbook = writer.book
-        num_f = workbook.add_format({'num_format': '#,##0.00'})
-        pct_f = workbook.add_format({'num_format': '0.0%'})
-        pnl_f = workbook.add_format({'num_format': '#,##0'})
+        base_fmt = {'font_size': 10}
+        num_f = workbook.add_format({**base_fmt, 'num_format': '#,##0.00'})
+        pct_f = workbook.add_format({**base_fmt, 'num_format': '0.0%'})
+        pnl_f = workbook.add_format({**base_fmt, 'num_format': '#,##0'})
+        header_f = workbook.add_format({**base_fmt, 'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+        normal_f = workbook.add_format(base_fmt)
 
-        # README
+        # --- ENHANCED README SHEET ---
         readme_sheet = workbook.add_worksheet('README')
-        readme_data = [['Metric', 'Description'], ['Composite', 'Main Rank'], ['Win Rate', 'Hit Rate %'],
-                       ['Stability', 'Robustness +/- 2 days'], ['Decay', 'Recency (Last 5yr)']]
-        for r, row in enumerate(readme_data): readme_sheet.write_row(r, 0, row)
+        readme_sheet.set_column('A:A', 25)
+        readme_sheet.set_column('B:B', 85)
 
-        # Rankings
-        sig.to_excel(writer, sheet_name='All', index=False)
-        rankings = {'Top Composite': sig.nlargest(30, 'composite_score'), 'Top WinRate': sig.nlargest(30, 'win_rate')}
-        for name, data in rankings.items():
-            data.to_excel(writer, sheet_name=name, index=False)
-            ws = writer.sheets[name]
-            ws.set_column('D:D', 12, pct_f);
-            ws.set_column('H:H', 12, pct_f)
-            ws.set_column('E:E', 15, pnl_f);
-            ws.set_column('F:M', 12, num_f)
+        readme_data = [
+            ['Metric Column', 'Detailed Interpretation & Logic'],
+            ['entry_date', 'The month and day the trade is initiated (at the Open).'],
+            ['holding_days', 'The fixed duration the position is held in calendar days.'],
+            ['direction', 'Long (buy) or Short (sell) bias for the seasonal window.'],
+            ['win_rate', 'Percentage of years where the trade resulted in a positive PnL.'],
+            ['total_pnl', 'The cumulative dollar profit/loss across all tested years (1 contract basis).'],
+            ['sharpe_ratio', 'Risk-adjusted return. Annualized Avg Return / Std Dev of Returns.'],
+            ['trimmed_sharpe', 'Sharpe ratio with top/bottom 5% outliers removed to test core robustness.'],
+            ['concentration_pct',
+             'Percentage of total PnL coming from the single best trade. High % = "Lucky" outlier.'],
+            ['decay_factor', 'Ratio of Recent Sharpe (5yr) to Lifetime Sharpe. > 1.0 means the edge is strengthening.'],
+            ['stability_score', 'Measures if the edge persists if you enter 2 days early/late. High = Robust window.'],
+            ['best_ml_regime', 'The K-Means cluster (0, 1, or 2) where this pattern performs best historically.'],
+            ['ml_confidence', 'Historical win rate specifically within the "Best ML Regime".'],
+            ['recent_win_rate', 'The win rate specifically over the last 5 tested years.'],
+            ['composite_score', 'Proprietary ranking (0-100) based on Sharpe, Win Rate, Stability, and Decay.'],
+            ['entry_month/day', 'Numerical breakdown used for calendar sorting and filtering.'],
+            ['REGIME KEY', f'Current ML Cluster Definitions for {scanner.symbol}:']
+        ]
 
-        if not distinct.empty:
+        # Get the regime descriptions dynamically
+        profiles = regime_pm.get_regime_profiles(scanner.data)
+        for cluster_id, row in profiles.iterrows():
+            readme_data.append([f'Regime {cluster_id}', f"Characteristics: {row['description']} (Vol: {row['volatility']:.4f}, Trend: {row['trend_dist']:.4f})"])
+
+        for r, row in enumerate(readme_data):
+            fmt = header_f if (r == 0 or 'REGIME KEY' in str(row[0])) else None
+            readme_sheet.write_row(r, 0, row, fmt)
+
+            # Rankings - Now using 'distinct_all' to ensure unique seasonal windows
+            sig.to_excel(writer, sheet_name='All Raw Data', index=False)
+
+            rankings = {
+                'Top Composite': distinct_all.nlargest(30, 'composite_score'),
+                'Top WinRate': distinct_all.nlargest(30, 'win_rate')
+            }
+
+            for name, data in rankings.items():
+                data.to_excel(writer, sheet_name=name, index=False)
+                ws = writer.sheets[name]
+
+                # Apply column widths based on text length + small buffer
+                for i, col in enumerate(data.columns):
+                    max_len = max(data[col].astype(str).map(len).max(), len(col)) + 2
+                    ws.set_column(i, i, max_len, normal_f)
+
+                # Re-apply specific formatting on top of base font
+                ws.set_column('D:D', None, pct_f)
+                ws.set_column('H:H', None, pct_f)
+                ws.set_column('E:E', None, pnl_f)
+                ws.set_column('F:M', None, num_f)
+
+            if not distinct_all.empty:
             ws = writer.book.add_worksheet('Equity Curves')
-            for i, (_, row) in enumerate(distinct.nlargest(10, 'composite_score').iterrows()):
+            # Use the top 10 from our already filtered list
+            for i, (_, row) in enumerate(distinct_all.nlargest(10, 'composite_score').iterrows()):
                 paths = scanner.get_trade_daily_paths(row['entry_month'], row['entry_day'], row['holding_days'],
                                                       row['direction'])
                 hist = pd.Series(
                     scanner.test_pattern(row['entry_month'], row['entry_day'], row['holding_days'], row['direction'])[
                         'yearly_pnl_series']).sort_index().cumsum()
                 h_name = f'D_{i}'
-                paths.to_excel(writer, sheet_name=h_name);
+                paths.to_excel(writer, sheet_name=h_name)
                 pd.DataFrame({'Y': hist.index, 'P': hist.values}).to_excel(writer, sheet_name=h_name,
                                                                            startcol=paths.shape[1] + 2, index=False)
                 workbook.get_worksheet_by_name(h_name).hide()
 
                 c_spag = workbook.add_chart({'type': 'line'})
                 for c, y in enumerate(paths.columns):
-                    c_spag.add_series({'name': str(y), 'categories': [h_name, 1, 0, len(paths), 0],
-                                       'values': [h_name, 1, c + 1, len(paths), c + 1]})
+                    c_spag.add_series({
+                        'name': str(y),
+                        'categories': [h_name, 1, 0, len(paths), 0],
+                        'values': [h_name, 1, c + 1, len(paths), c + 1],
+                        'line': {'width': 1.0}  # Thinner lines for spaghetti plot
+                    })
                 c_spag.set_title({'name': f"{row['entry_date']} {row['direction']} ({int(row['holding_days'])}d)"})
-                c_spag.set_legend({'position': 'right'});
-                ws.insert_chart(i * 22, 1, c_spag)
+                c_spag.set_legend({'position': 'right'})
+                c_spag.set_size({'width': 800, 'height': 450})  # Larger chart size
+                ws.insert_chart(i * 25, 1, c_spag)
 
                 c_hist = workbook.add_chart({'type': 'line'})
                 sc = paths.shape[1] + 2
-                c_hist.add_series({'name': 'Equity', 'categories': [h_name, 1, sc, len(hist), sc],
-                                   'values': [h_name, 1, sc + 1, len(hist), sc + 1]})
-                c_hist.set_title({'name': "Equity Curve"});
-                ws.insert_chart(i * 22, 11, c_hist)
+                c_hist.add_series({
+                    'name': 'Equity',
+                    'categories': [h_name, 1, sc, len(hist), sc],
+                    'values': [h_name, 1, sc + 1, len(hist), sc + 1],
+                    'line': {'color': 'blue', 'width': 1.5}  # Defined width for main curve
+                })
+                c_hist.set_title({'name': "Equity Curve"})
+                c_hist.set_size({'width': 800, 'height': 450})  # Larger chart size
+                ws.insert_chart(i * 25, 14, c_hist)
 
 
 def create_master_calendar(all_tops, output_path):
     if not all_tops: return
     master = pd.concat(all_tops, ignore_index=True)
+
+    # Apply overlap filtering to the master list to ensure a clean calendar
+    master = filter_overlapping_strategies(master, window=5)
+
     master['month'] = master['entry_date'].str.split('-').str[0].astype(int)
     master['day'] = master['entry_date'].str.split('-').str[1].astype(int)
     master = master.sort_values(['month', 'day'])
+
     with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
         master.to_excel(writer, sheet_name='Calendar', index=False)
         ws = writer.sheets['Calendar']
-        ws.set_column('A:B', 15);
-        ws.set_column('E:E', 12, writer.book.add_format({'num_format': '0.0%'}))
+
+        # Style Master Calendar
+        base_f = writer.book.add_format({'font_size': 10})
+        pct_f = writer.book.add_format({'font_size': 10, 'num_format': '0.0%'})
+
+        for i, col in enumerate(master.columns):
+            max_len = max(master[col].astype(str).map(len).max(), len(col)) + 2
+            ws.set_column(i, i, max_len, base_f)
+
+        ws.set_column('E:E', None, pct_f)  # Win Rate column
+
         ws.conditional_format('B2:B5000', {'type': 'formula', 'criteria': f'=LEFT($B2,2)="{datetime.now().month:02d}"',
                                            'format': writer.book.add_format({'bg_color': '#FFEB9C'})})
     print(f"★ CALENDAR CREATED: {output_path}")
